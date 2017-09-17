@@ -1,5 +1,3 @@
-import numpy
-
 from chainer import cuda
 from chainer import function
 from chainer import utils
@@ -24,16 +22,13 @@ class Clip(function.Function):
         x_type, = in_types
         type_check.expect(x_type.dtype.kind == 'f')
 
-    def forward_cpu(self, x):
-        return utils.force_array(
-            numpy.clip(x[0], self.x_min, self.x_max)),
+    def forward(self, inputs):
+        x, = inputs
+        return utils.force_array(x.clip(self.x_min, self.x_max)),
 
     def backward_cpu(self, x, gy):
         return utils.force_array(
             gy[0] * (self.x_min < x[0]) * (x[0] < self.x_max)),
-
-    def forward_gpu(self, x):
-        return cuda.cupy.clip(x[0], self.x_min, self.x_max),
 
     def backward_gpu(self, x, gy):
         gx = cuda.elementwise(

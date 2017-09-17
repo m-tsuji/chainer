@@ -43,8 +43,9 @@ class TestClippedReLU(unittest.TestCase):
         self.check_forward(cuda.to_gpu(self.x))
 
     def check_backward(self, x_data, y_grad):
-        gradient_check.check_backward(
-            functions.ClippedReLU(self.z), x_data, y_grad, dtype=numpy.float64)
+        def f(x):
+            return functions.clipped_relu(x, self.z)
+        gradient_check.check_backward(f, x_data, y_grad, dtype=numpy.float64)
 
     def test_backward_cpu(self):
         self.check_backward(self.x, self.gy)

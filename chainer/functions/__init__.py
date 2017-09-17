@@ -1,7 +1,6 @@
 """Collection of :class:`~chainer.Function` implementations."""
 
 from chainer.functions.activation.clipped_relu import clipped_relu  # NOQA
-from chainer.functions.activation.clipped_relu import ClippedReLU  # NOQA
 from chainer.functions.activation.crelu import crelu  # NOQA
 from chainer.functions.activation.crelu import CReLU  # NOQA
 from chainer.functions.activation.elu import elu  # NOQA
