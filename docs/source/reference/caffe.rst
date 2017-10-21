@@ -15,3 +15,4 @@ This functionality is provided by the :class:`chainer.links.caffe.CaffeFunction`
    :nosignatures:
 
    chainer.links.caffe.CaffeFunction
+   chainer.caffe_export

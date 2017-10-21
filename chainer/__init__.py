@@ -31,6 +31,7 @@ from chainer import variable  # NOQA
 # These functions from backends.cuda are kept for backward compatibility
 from chainer.backends.cuda import should_use_cudnn  # NOQA
 from chainer.backends.cuda import should_use_cudnn_tensor_core  # NOQA
+from chainer.caffe_export import caffe_export  # NOQA
 from chainer.configuration import config  # NOQA
 from chainer.configuration import global_config  # NOQA
 from chainer.configuration import using_config  # NOQA
