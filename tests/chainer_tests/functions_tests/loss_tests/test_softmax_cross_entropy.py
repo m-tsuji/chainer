@@ -38,6 +38,7 @@ from chainer.testing import attr
     'enable_double_backprop': [False],
     'label_dtype': [numpy.int8, numpy.int16],
 })))
+@testing.fix_random()
 class TestSoftmaxCrossEntropy(unittest.TestCase):
 
     def setUp(self):
@@ -318,6 +319,7 @@ class TestClassWeightAssertion(unittest.TestCase):
     'weight_apply': [True],
     'dtype': [numpy.float16, numpy.float32, numpy.float64],
 })))
+@testing.fix_random()
 class TestElementwiseSoftmaxCrossEntropy(unittest.TestCase):
 
     def setUp(self):
