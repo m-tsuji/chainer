@@ -21,21 +21,20 @@ from chainer.testing import attr
     'normalize': [True],
     'weight_apply': [True],
     'dtype': [numpy.float32],
+    'label_dtype': [numpy.int32],
 }) + testing.product({
     'shape_ignore': [(None, None), ((2, 3, 2, 2), (0, 1, 0))],
     'cache_score': [False],
     'normalize': [True, False],
     'weight_apply': [False, True],
-    'enable_double_backprop': [False, True],
-    'label_dtype': [numpy.int64],
     'dtype': [numpy.float32],
+    'label_dtype': [numpy.int64],
 }) + testing.product({
     'shape_ignore': [(None, None),  ((2, 3, 2), (0, 1))],
     'cache_score': [False],
     'normalize': [True],
     'weight_apply': [True],
     'dtype': [numpy.float16, numpy.float32, numpy.float64],
-    'enable_double_backprop': [False],
     'label_dtype': [numpy.int8, numpy.int16],
 })))
 @testing.fix_random()
