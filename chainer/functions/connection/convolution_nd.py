@@ -6,7 +6,6 @@ import chainer
 from chainer import configuration
 from chainer import cuda
 from chainer import function
-from chainer.functions.connection import convolution_2d
 from chainer.utils import conv
 from chainer.utils import conv_nd
 from chainer.utils import type_check
@@ -14,13 +13,6 @@ from chainer.utils import type_check
 
 if cuda.cudnn_enabled:
     cudnn = cuda.cudnn
-    libcudnn = cuda.cuda.cudnn
-    _cudnn_version_ = libcudnn.getVersion()
-    _fwd_pref = libcudnn.CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT
-    _bwd_filter_pref = \
-        libcudnn.CUDNN_CONVOLUTION_BWD_FILTER_SPECIFY_WORKSPACE_LIMIT
-    _bwd_data_pref = \
-        libcudnn.CUDNN_CONVOLUTION_BWD_DATA_SPECIFY_WORKSPACE_LIMIT
 
 
 class ConvolutionND(function.Function):
@@ -90,8 +82,6 @@ class ConvolutionND(function.Function):
         dims = x.shape[2:]
         stride = self.stride
         pad = self.pad
-        ndim = self.ndim
-        colon = slice(None)
 
         # Make empty array for result.
         outs = tuple(
@@ -100,55 +90,14 @@ class ConvolutionND(function.Function):
         assert all(out > 0 for out in outs), 'Output sizes should be positive.'
         y_shape = (n, out_c) + outs  # (n, c_O, out_1, out_2, ..., out_N)
         y = cuda.cupy.empty(y_shape, dtype=x.dtype)
-
-        # Convert to C-contiguous arrays.
-        x = cuda.cupy.ascontiguousarray(x)
-        W = cuda.cupy.ascontiguousarray(W)
-        if b is not None:
-            b = cuda.cupy.ascontiguousarray(b)
-
-        # Get cuDNN handler and descriptors.
-        handle = cudnn.get_handle()
-        x_desc = cudnn.create_tensor_descriptor(x)
-        y_desc = cudnn.create_tensor_descriptor(y)
-
-        self.filter_desc = cudnn.create_filter_descriptor(W)
-        self.conv_param = (pad, stride, x.dtype)
-        self.conv_desc = cudnn.create_convolution_descriptor(*self.conv_param)
-        if b is not None:
-            b_index = (None, colon) + (None,) * ndim
-            self.bias_desc = cudnn.create_tensor_descriptor(b[b_index])
-
-        # Find cuDNN algorithm to be used.
         workspace_size = cuda.get_max_workspace_size()
-        workspace = cuda.cupy.empty((workspace_size,), dtype='b')
-        if configuration.config.autotune and _cudnn_version_ >= 5000:
-            algo = convolution_2d.get_algorithm_fwd(
-                x, W, y, self.conv_param, handle, x_desc, self.filter_desc,
-                self.conv_desc, y_desc, workspace)
-        else:
-            algo = libcudnn.getConvolutionForwardAlgorithm(
-                handle, x_desc.value, self.filter_desc.value,
-                self.conv_desc.value, y_desc.value, _fwd_pref,
-                workspace_size)
-
-        # cuDNN forward computation.
-        oz_dtype = 'd' if x.dtype == 'd' else 'f'
-        one = numpy.array(1, dtype=oz_dtype).ctypes
-        zero = numpy.array(0, dtype=oz_dtype).ctypes
-        libcudnn.convolutionForward(
-            handle, one.data, x_desc.value, x.data.ptr,
-            self.filter_desc.value, W.data.ptr, self.conv_desc.value,
-            algo, workspace.data.ptr, workspace_size, zero.data,
-            y_desc.value, y.data.ptr)
-
-        # Add bias if given.
-        # TODO(takagi) Support unshared bias
-        if b is not None:
-            cudnn.add_tensor(
-                handle, one.data, self.bias_desc.value, b.data.ptr,
-                one.data, y_desc.value, y.data.ptr)
-
+        dilation = (1,) * self.ndim
+        group = 1
+        autotune = configuration.config.autotune
+        tensor_core = configuration.config.use_cudnn_tensor_core
+        cudnn.convolution_forward(
+            x, W, b, y, pad, stride, dilation, group, workspace_size, autotune,
+            tensor_core)
         return y,
 
     def forward(self, inputs):
@@ -217,61 +166,34 @@ class ConvolutionND(function.Function):
 
     def _backward_cudnn(self, x, W, b, gy):
         # Convert to C-contiguous arrays.
-        x = cuda.cupy.ascontiguousarray(x)
-        W = cuda.cupy.ascontiguousarray(W)
         gy = cuda.cupy.ascontiguousarray(gy)
 
         # Make empty arrays for result.
         gx = cuda.cupy.empty_like(x)
         gW = cuda.cupy.empty_like(W)
 
-        # Get cuDNN handler and descriptors.
-        handle = cudnn.get_handle()
-        x_desc = cudnn.create_tensor_descriptor(x)
-        gy_desc = cudnn.create_tensor_descriptor(gy)
-
-        # Compute gradients.
-        oz_dtype = 'd' if x.dtype == 'd' else 'f'
-        one = numpy.array(1, dtype=oz_dtype).ctypes
-        zero = numpy.array(0, dtype=oz_dtype).ctypes
+        # Compute
+        pad = self.pad
+        stride = self.stride
+        dilation = (1,) * self.ndim
+        group = 1
         workspace_size = cuda.get_max_workspace_size()
-        workspace = cuda.cupy.empty((workspace_size,), dtype='b')
-
-        # Compute filter weight gradient.
-        if configuration.config.autotune and _cudnn_version_ >= 5000:
-            algo = convolution_2d.get_algorithm_bwd_filter(
-                x, gy, gW, self.conv_param, handle, x_desc, gy_desc,
-                self.conv_desc, self.filter_desc, workspace)
-        else:
-            algo = libcudnn.getConvolutionBackwardFilterAlgorithm(
-                handle, x_desc.value, gy_desc.value, self.conv_desc.value,
-                self.filter_desc.value, _bwd_filter_pref, workspace_size)
-
-        libcudnn.convolutionBackwardFilter_v3(
-            handle, one.data, x_desc.value, x.data.ptr,
-            gy_desc.value, gy.data.ptr, self.conv_desc.value,
-            algo, workspace.data.ptr, workspace_size,
-            zero.data, self.filter_desc.value, gW.data.ptr)
-
-        # Compute input gradient.
-        algo = libcudnn.getConvolutionBackwardDataAlgorithm(
-            handle, self.filter_desc.value, gy_desc.value,
-            self.conv_desc.value, x_desc.value, _bwd_data_pref,
-            workspace_size)
-        libcudnn.convolutionBackwardData_v3(
-            handle, one.data, self.filter_desc.value, W.data.ptr,
-            gy_desc.value, gy.data.ptr, self.conv_desc.value,
-            algo, workspace.data.ptr, workspace_size,
-            zero.data, x_desc.value, gx.data.ptr)
+        deterministic = configuration.config.cudnn_deterministic
+        autotune = configuration.config.autotune
+        tensor_core = configuration.config.use_cudnn_tensor_core
+        cudnn.convolution_backward_filter(
+            x, gy, gW, pad, stride, dilation, group, workspace_size,
+            deterministic, autotune, tensor_core)
+        cudnn.convolution_backward_data(
+            W, gy, None, gx, pad, stride, dilation, group, workspace_size,
+            deterministic, autotune, tensor_core)
 
         # Compute bias gradient if given and return gradients.
         if b is None:
             return gx, gW
         else:
             gb = cuda.cupy.empty_like(b)
-            libcudnn.convolutionBackwardBias(
-                handle, one.data, gy_desc.value, gy.data.ptr,
-                zero.data, self.bias_desc.value, gb.data.ptr)
+            cudnn.convolution_backward_bias(gy, gb)
             return gx, gW, gb
 
     def backward(self, inputs, grad_outputs):

@@ -256,12 +256,10 @@ class TestConvolution2DFunction(unittest.TestCase):
 
 @testing.parameterize(*(testing.product({
     'use_cudnn': ['always', 'auto', 'never'],
-    'cudnn_deterministic': [False, True],
     'dtype': [numpy.float16, numpy.float32, numpy.float64],
     'dilate': [1],
 }) + testing.product({
     'use_cudnn': ['always', 'auto', 'never'],
-    'cudnn_deterministic': [False],
     'dtype': [numpy.float16, numpy.float32, numpy.float64],
     'dilate': [2],
 })))
@@ -295,22 +293,18 @@ class TestConvolution2DCudnnCall(unittest.TestCase):
 
     def test_call_cudnn_forward(self):
         with chainer.using_config('use_cudnn', self.use_cudnn):
-            with chainer.using_config('cudnn_deterministic',
-                                      self.cudnn_deterministic):
-                with mock.patch('cupy.cuda.cudnn.convolutionForward') as func:
-                    self.forward()
-                    self.assertEqual(func.called, self.should_call_cudnn)
+            with mock.patch('cupy.cudnn.convolution_forward') as func:
+                self.forward()
+                self.assertEqual(func.called, self.should_call_cudnn)
 
     def test_call_cudnn_backward(self):
         with chainer.using_config('use_cudnn', self.use_cudnn):
-            with chainer.using_config('cudnn_deterministic',
-                                      self.cudnn_deterministic):
-                y = self.forward()
-                y.grad = self.gy
-                name = 'cupy.cuda.cudnn.convolutionBackwardData_v3'
-                with mock.patch(name) as func:
-                    y.backward()
-                    self.assertEqual(func.called, self.should_call_cudnn)
+            y = self.forward()
+            y.grad = self.gy
+            name = 'cupy.cudnn.convolution_backward_data'
+            with mock.patch(name) as func:
+                y.backward()
+                self.assertEqual(func.called, self.should_call_cudnn)
 
 
 @testing.parameterize(*testing.product({
@@ -344,25 +338,12 @@ class TestConvolution2DFunctionCudnnDeterministic(unittest.TestCase):
 
     def test_called(self):
         with mock.patch(
-            'chainer.functions.connection.convolution_2d.libcudnn',
-            autospec=True
-        ) as mlibcudnn_conv, mock.patch(
-            'chainer.functions.connection.deconvolution_2d.libcudnn',
-            autospec=True
-        ) as mlibcudnn_deconv:
-
+                'cupy.cudnn.convolution_backward_filter', autospec=True) as f:
             # cuDNN version >= v3 supports `cudnn_deterministic` option
             x, W, b, y = self._run()
 
             # in Convolution2DFunction.backward_gpu()
-            self.assertFalse(
-                mlibcudnn_conv.getConvolutionBackwardFilterAlgorithm.called)
-            self.assertEqual(
-                mlibcudnn_conv.convolutionBackwardFilter_v3.call_count, 1)
-            self.assertFalse(
-                mlibcudnn_deconv.getConvolutionBackwardDataAlgorithm.called)
-            self.assertEqual(
-                mlibcudnn_deconv.convolutionBackwardData_v3.call_count, 1)
+            self.assertTrue(f.called)
 
     def test_cudnn_deterministic(self):
         x1, W1, b1, y1 = self._run()

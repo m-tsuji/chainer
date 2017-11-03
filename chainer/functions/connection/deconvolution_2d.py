@@ -12,28 +12,7 @@ from chainer.utils import type_check
 
 if cuda.cudnn_enabled:
     cudnn = cuda.cudnn
-    libcudnn = cuda.cuda.cudnn
-    _cudnn_version_ = libcudnn.getVersion()
-    _fwd_pref = libcudnn.CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT
-    _bwd_filter_pref = \
-        libcudnn.CUDNN_CONVOLUTION_BWD_FILTER_SPECIFY_WORKSPACE_LIMIT
-    _bwd_data_pref = \
-        libcudnn.CUDNN_CONVOLUTION_BWD_DATA_SPECIFY_WORKSPACE_LIMIT
-    _algorithm = {}
-
-
-def get_algorithm(W, dy, dx, conv_param, handle, filter_desc, dy_desc,
-                  conv_desc, dx_desc, workspace):
-    key = (dx.shape, W.shape, dy.shape, conv_param)
-    if key in _algorithm:
-        return _algorithm[key]
-    ret = libcudnn.findConvolutionBackwardDataAlgorithmEx(
-        handle, filter_desc.value, W.data.ptr, dy_desc.value, dy.data.ptr,
-        conv_desc.value, dx_desc.value, dx.data.ptr, 1, workspace.data.ptr,
-        workspace.size)
-    algo = ret[0]['algo']
-    _algorithm[key] = algo
-    return algo
+    _cudnn_version = cuda.cuda.cudnn.getVersion()
 
 
 def _pair(x):
@@ -176,61 +155,19 @@ class Deconvolution2DFunction(function_node.FunctionNode):
 
         if (not self.cover_all and chainer.should_use_cudnn('>=auto') and
                 x.dtype == W.dtype and
-                ((self.dy == 1 and self.dx == 1) or _cudnn_version_ >= 6000)):
-            x = cuda.cupy.ascontiguousarray(x)
-            W = cuda.cupy.ascontiguousarray(W)
-            if b is not None:
-                b = cuda.cupy.ascontiguousarray(b)
-
-            use_tensor_core = chainer.should_use_cudnn_tensor_core(x.dtype)
-
-            handle = cudnn.get_handle()
-            x_desc = cudnn.create_tensor_descriptor(x)
-            y = cuda.cupy.empty((n, c, self.outh, self.outw),
-                                dtype=x.dtype)
-            y_desc = cudnn.create_tensor_descriptor(y)
-
-            filter_desc = cudnn.create_filter_descriptor(W)
-            conv_param = (self.ph, self.pw), (self.sy, self.sx), x.dtype
-            conv_desc = cudnn.create_convolution_descriptor(
-                *conv_param, dilation=(self.dy, self.dx),
-                use_tensor_core=use_tensor_core)
-            if b is not None:
-                bias_desc = cudnn.create_tensor_descriptor(
-                    b[None, :, None, None])
-
-            oz_dtype = 'd' if x.dtype == 'd' else 'f'
-            one = numpy.array(1, dtype=oz_dtype).ctypes
-            zero = numpy.array(0, dtype=oz_dtype).ctypes
-
+                (_cudnn_version >= 6000 or (self.dy == 1 and self.dx == 1))):
+            y = cuda.cupy.empty((n, c, self.outh, self.outw), dtype=x.dtype)
+            pad = (self.ph, self.pw)
+            stride = (self.sy, self.sx)
+            dilation = (self.dy, self.dx)
+            group = 1
             workspace_size = cuda.get_max_workspace_size()
-            workspace = cuda.cupy.empty((workspace_size,), dtype='b')
-
-            if configuration.config.cudnn_deterministic:
-                algo = libcudnn.CUDNN_CONVOLUTION_BWD_DATA_ALGO_1
-            elif configuration.config.autotune and _cudnn_version_ >= 5000:
-                algo = get_algorithm(W, x, y, conv_param, handle, filter_desc,
-                                     x_desc, conv_desc, y_desc, workspace)
-            else:
-                algo = libcudnn.getConvolutionBackwardDataAlgorithm(
-                    handle, filter_desc.value, x_desc.value, conv_desc.value,
-                    y_desc.value, _bwd_data_pref, workspace_size)
-
-            if use_tensor_core:
-                # Only CUDNN_CONVOLUTION_BWD_DATA_ALGO_1 supports
-                # Tensor-Core in cuDNN7
-                algo = libcudnn.CUDNN_CONVOLUTION_BWD_DATA_ALGO_1
-
-            libcudnn.convolutionBackwardData_v3(
-                handle, one.data, filter_desc.value, W.data.ptr,
-                x_desc.value, x.data.ptr, conv_desc.value,
-                algo, workspace.data.ptr, workspace_size,
-                zero.data, y_desc.value, y.data.ptr)
-
-            if b is not None:
-                cudnn.add_tensor(
-                    handle, one.data, bias_desc.value, b.data.ptr,
-                    one.data, y_desc.value, y.data.ptr)
+            deterministic = configuration.config.cudnn_deterministic
+            autotune = configuration.config.autotune
+            tensor_core = configuration.config.use_cudnn_tensor_core
+            cudnn.convolution_backward_data(
+                W, x, b, y, pad, stride, dilation, group, workspace_size,
+                deterministic, autotune, tensor_core)
         else:
             gcol = cuda.cupy.tensordot(W, x, (0, 1)).astype(x.dtype,
                                                             copy=False)
