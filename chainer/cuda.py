@@ -406,7 +406,7 @@ def clear_memo():
 # ------------------------------------------------------------------------------
 # Kernel definition utility
 # ------------------------------------------------------------------------------
-@memoize(for_each_device=True)
+@memoize()
 def elementwise(in_params, out_params, operation, name, **kwargs):
     """Creates an elementwise kernel function.
 
@@ -424,7 +424,7 @@ def elementwise(in_params, out_params, operation, name, **kwargs):
         in_params, out_params, operation, name, **kwargs)
 
 
-@memoize(for_each_device=True)
+@memoize()
 def reduce(in_params, out_params, map_expr, reduce_expr, post_map_expr,
            identity, name,  **kwargs):
     """Creates a global reduction kernel function.
