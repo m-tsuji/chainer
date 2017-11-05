@@ -7,6 +7,15 @@ from chainer import optimizer
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.rho = 0.95
 _default_hyperparam.eps = 1e-6
+if cuda.available:
+    _update_rule_kernel = cuda.elementwise(
+        'T grad, T one_minus_rho, T eps',
+        'T param, T msg, T msdx',
+        '''msg   = msg + one_minus_rho * (grad * grad - msg);
+           T dx  = sqrt((msdx + eps) / (msg + eps)) * grad;
+           msdx  += one_minus_rho * (dx * dx - msdx);
+           param -= dx;''',
+        'adadelta')
 
 
 class AdaDeltaRule(optimizer.UpdateRule):
@@ -58,16 +67,9 @@ class AdaDeltaRule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        cuda.elementwise(
-            'T grad, T one_minus_rho, T eps',
-            'T param, T msg, T msdx',
-            '''msg   = msg + one_minus_rho * (grad * grad - msg);
-               T dx  = sqrt((msdx + eps) / (msg + eps)) * grad;
-               msdx  += one_minus_rho * (dx * dx - msdx);
-               param -= dx;''',
-            'adadelta')(grad, 1 - self.hyperparam.rho,
-                        self.hyperparam.eps, param.data,
-                        self.state['msg'], self.state['msdx'])
+        _update_rule_kernel(
+            grad, 1 - self.hyperparam.rho, self.hyperparam.eps, param.data,
+            self.state['msg'], self.state['msdx'])
 
 
 class AdaDelta(optimizer.GradientMethod):

@@ -7,6 +7,19 @@ from chainer import optimizer
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.001
 _default_hyperparam.eps = 1e-16
+if cuda.available:
+    _update_rule_kernel = cuda.elementwise(
+        'T grad, T lr, T eps',
+        'T param, T mem, T g, T g2',
+        '''T r, x;
+           r = 1 / (mem + 1);
+           g = (1 - r) * g + r * grad;
+           g2 = (1 - r) * g2 + r * grad * grad;
+           x = g * g / (g2 + eps);
+           param -= grad * min(lr, x) / (sqrt(g2) + eps);
+           mem = 1 + mem * (1 - x)
+           ''',
+        'smorms3')
 
 
 class SMORMS3Rule(optimizer.UpdateRule):
@@ -59,20 +72,9 @@ class SMORMS3Rule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        cuda.elementwise(
-            'T grad, T lr, T eps',
-            'T param, T mem, T g, T g2',
-            '''T r, x;
-               r = 1 / (mem + 1);
-               g = (1 - r) * g + r * grad;
-               g2 = (1 - r) * g2 + r * grad * grad;
-               x = g * g / (g2 + eps);
-               param -= grad * min(lr, x) / (sqrt(g2) + eps);
-               mem = 1 + mem * (1 - x)
-               ''',
-            'smorms3')(grad, self.hyperparam.lr, self.hyperparam.eps,
-                       param.data, self.state['mem'], self.state['g'],
-                       self.state['g2'])
+        _update_rule_kernel(grad, self.hyperparam.lr, self.hyperparam.eps,
+                            param.data, self.state['mem'], self.state['g'],
+                            self.state['g2'])
 
 
 class SMORMS3(optimizer.GradientMethod):

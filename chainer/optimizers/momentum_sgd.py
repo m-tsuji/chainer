@@ -5,6 +5,13 @@ from chainer import optimizer
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
+if cuda.available:
+    _update_rule_kernel = cuda.elementwise(
+        'T grad, T lr, T momentum',
+        'T param, T v',
+        '''v = momentum * v - lr * grad;
+           param += v;''',
+        'momentum_sgd')
 
 
 class MomentumSGDRule(optimizer.UpdateRule):
@@ -48,14 +55,8 @@ class MomentumSGDRule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        cuda.elementwise(
-            'T grad, T lr, T momentum',
-            'T param, T v',
-            '''v = momentum * v - lr * grad;
-               param += v;''',
-            'momentum_sgd')(
-                grad, self.hyperparam.lr, self.hyperparam.momentum,
-                param.data, self.state['v'])
+        _update_rule_kernel(grad, self.hyperparam.lr, self.hyperparam.momentum,
+                            param.data, self.state['v'])
 
 
 class MomentumSGD(optimizer.GradientMethod):

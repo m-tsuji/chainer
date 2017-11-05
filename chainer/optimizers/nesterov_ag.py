@@ -5,6 +5,15 @@ from chainer import optimizer
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
+if cuda.available:
+    _update_rule_kernel = cuda.elementwise(
+        'T grad, T lr, T momentum',
+        'T param, T v',
+        '''
+           v = v * momentum - lr * grad;
+           param += momentum * momentum * v - (1 + momentum) * lr * grad;
+        ''',
+        'nesterov_ag')
 
 
 class NesterovAGRule(optimizer.UpdateRule):
@@ -51,16 +60,9 @@ class NesterovAGRule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        cuda.elementwise(
-            'T grad, T lr, T momentum',
-            'T param, T v',
-            '''
-               v = v * momentum - lr * grad;
-               param += momentum * momentum * v - (1 + momentum) * lr * grad;
-            ''',
-            'nesterov_ag')(
-                grad, self.hyperparam.lr, self.hyperparam.momentum,
-                param.data, self.state['v'])
+        _update_rule_kernel(
+            grad, self.hyperparam.lr, self.hyperparam.momentum,
+            param.data, self.state['v'])
 
 
 class NesterovAG(optimizer.GradientMethod):

@@ -8,6 +8,13 @@ _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.alpha = 0.99
 _default_hyperparam.eps = 1e-8
+if cuda.available:
+    _update_rule_kernel = cuda.elementwise(
+        'T grad, T lr, T alpha, T eps',
+        'T param, T ms',
+        '''ms = alpha * ms + (1 - alpha) * grad * grad;
+           param -= lr * grad / (sqrt(ms) + eps);''',
+        'rmsprop')
 
 
 class RMSpropRule(optimizer.UpdateRule):
@@ -67,13 +74,8 @@ class RMSpropRule(optimizer.UpdateRule):
             raise ValueError(
                 'eps of RMSprop optimizer is too small for {} ({})'.format(
                     grad.dtype.name, hp.eps))
-        cuda.elementwise(
-            'T grad, T lr, T alpha, T eps',
-            'T param, T ms',
-            '''ms = alpha * ms + (1 - alpha) * grad * grad;
-               param -= lr * grad / (sqrt(ms) + eps);''',
-            'rmsprop')(grad, hp.lr, hp.alpha,
-                       eps, param.data, self.state['ms'])
+        _update_rule_kernel(grad, self.hyperparam.lr, self.hyperparam.alpha,
+                            eps, param.data, self.state['ms'])
 
 
 class RMSprop(optimizer.GradientMethod):
