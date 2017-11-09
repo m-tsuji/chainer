@@ -5,15 +5,6 @@ from chainer import optimizer
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
 _default_hyperparam.momentum = 0.9
-if cuda.available:
-    _update_rule_kernel = cuda.elementwise(
-        'T grad, T lr, T momentum',
-        'T param, T v',
-        '''
-           v = v * momentum - lr * grad;
-           param += momentum * momentum * v - (1 + momentum) * lr * grad;
-        ''',
-        'nesterov_ag')
 
 
 class NesterovAGRule(optimizer.UpdateRule):
@@ -30,6 +21,7 @@ class NesterovAGRule(optimizer.UpdateRule):
         momentum (float): Exponential decay rate of the first order moment.
 
     """
+    _kernel = None
 
     def __init__(self, parent_hyperparam=None, lr=None, momentum=None):
         super(NesterovAGRule, self).__init__(
@@ -60,7 +52,16 @@ class NesterovAGRule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        _update_rule_kernel(
+        if NesterovAGRule._kernel is None:
+            NesterovAGRule._kernel = cuda.elementwise(
+                'T grad, T lr, T momentum',
+                'T param, T v',
+                '''
+                v = v * momentum - lr * grad;
+                param += momentum * momentum * v - (1 + momentum) * lr * grad;
+                ''',
+                'nesterov_ag')
+        NesterovAGRule._kernel(
             grad, self.hyperparam.lr, self.hyperparam.momentum,
             param.data, self.state['v'])
 

@@ -9,16 +9,6 @@ _default_hyperparam.lr = 1e-4
 _default_hyperparam.alpha = 0.95
 _default_hyperparam.momentum = 0.9
 _default_hyperparam.eps = 1e-4
-if cuda.available:
-    _update_rule_kernel = cuda.elementwise(
-        'T grad, T lr, T alpha, T momentum, T eps',
-        'T param, T avg_n, T avg_g, T delta',
-        '''avg_n = alpha * avg_n + (1 - alpha) * grad * grad;
-           avg_g = alpha * avg_g + (1 - alpha) * grad;
-           delta = delta * momentum -
-               lr * grad * rsqrt(avg_n - avg_g * avg_g + eps);
-           param += delta;''',
-        'rmsprop_graves')
 
 
 class RMSpropGravesRule(optimizer.UpdateRule):
@@ -39,6 +29,7 @@ class RMSpropGravesRule(optimizer.UpdateRule):
         eps (float): Small value for the numerical stability.
 
     """
+    _kernel = None
 
     def __init__(self, parent_hyperparam=None,
                  lr=None, alpha=None, momentum=None, eps=None):
@@ -80,7 +71,17 @@ class RMSpropGravesRule(optimizer.UpdateRule):
         if grad is None:
             return
         hp = self.hyperparam
-        _update_rule_kernel(
+        if RMSpropGravesRule._kernel is None:
+            RMSpropGravesRule._kernel = cuda.elementwise(
+                'T grad, T lr, T alpha, T momentum, T eps',
+                'T param, T avg_n, T avg_g, T delta',
+                '''avg_n = alpha * avg_n + (1 - alpha) * grad * grad;
+                   avg_g = alpha * avg_g + (1 - alpha) * grad;
+                   delta = delta * momentum -
+                       lr * grad * rsqrt(avg_n - avg_g * avg_g + eps);
+                   param += delta;''',
+                'rmsprop_graves')
+        RMSpropGravesRule._kernel(
             grad, hp.lr, hp.alpha, hp.momentum, hp.eps, param.data,
             self.state['n'], self.state['g'], self.state['delta'])
 

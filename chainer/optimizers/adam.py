@@ -11,14 +11,6 @@ _default_hyperparam.alpha = 0.001
 _default_hyperparam.beta1 = 0.9
 _default_hyperparam.beta2 = 0.999
 _default_hyperparam.eps = 1e-8
-if cuda.available:
-    _update_rule_kernel = cuda.elementwise(
-        'T grad, T lr, T one_minus_beta1, T one_minus_beta2, T eps',
-        'T param, T m, T v',
-        '''m += one_minus_beta1 * (grad - m);
-           v += one_minus_beta2 * (grad * grad - v);
-           param -= lr * m / (sqrt(v) + eps);''',
-        'adam')
 
 
 class AdamRule(optimizer.UpdateRule):
@@ -37,6 +29,7 @@ class AdamRule(optimizer.UpdateRule):
         eps (float): Small value for the numerical stability.
 
     """
+    _kernel = None
 
     def __init__(self, parent_hyperparam=None,
                  alpha=None, beta1=None, beta2=None, eps=None):
@@ -83,9 +76,17 @@ class AdamRule(optimizer.UpdateRule):
             raise ValueError(
                 'eps of Adam optimizer is too small for {} ({})'.format(
                     grad.dtype.name, hp.eps))
-        _update_rule_kernel(grad, self.lr, 1 - self.hyperparam.beta1,
-                            1 - self.hyperparam.beta2, eps,
-                            param.data, self.state['m'], self.state['v'])
+        if AdamRule._kernel is None:
+            AdamRule._kernel = cuda.elementwise(
+                'T grad, T lr, T one_minus_beta1, T one_minus_beta2, T eps',
+                'T param, T m, T v',
+                '''m += one_minus_beta1 * (grad - m);
+                   v += one_minus_beta2 * (grad * grad - v);
+                   param -= lr * m / (sqrt(v) + eps);''',
+                'adam')
+        AdamRule._kernel(grad, self.lr, 1 - self.hyperparam.beta1,
+                         1 - self.hyperparam.beta2, eps,
+                         param.data, self.state['m'], self.state['v'])
 
     @property
     def lr(self):

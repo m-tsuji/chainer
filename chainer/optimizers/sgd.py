@@ -4,10 +4,6 @@ from chainer import optimizer
 
 _default_hyperparam = optimizer.Hyperparameter()
 _default_hyperparam.lr = 0.01
-if cuda.available:
-    _update_rule_kernel = cuda.elementwise(
-        'T grad, T lr', 'T param',
-        'param -= lr * grad', 'sgd')
 
 
 class SGDRule(optimizer.UpdateRule):
@@ -23,6 +19,7 @@ class SGDRule(optimizer.UpdateRule):
         lr (float): Learning rate.
 
     """
+    _kernel = None
 
     def __init__(self, parent_hyperparam=None, lr=None):
         super(SGDRule, self).__init__(
@@ -40,7 +37,11 @@ class SGDRule(optimizer.UpdateRule):
         grad = param.grad
         if grad is None:
             return
-        _update_rule_kernel(grad, self.hyperparam.lr, param.data)
+        if SGDRule._kernel is None:
+            SGDRule._kernel = cuda.elementwise(
+                'T grad, T lr', 'T param',
+                'param -= lr * grad', 'sgd')
+        SGDRule._kernel(grad, self.hyperparam.lr, param.data)
 
 
 class SGD(optimizer.GradientMethod):
