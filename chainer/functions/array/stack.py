@@ -1,4 +1,38 @@
+import six
+
 import chainer
+from chainer import cuda
+from chainer import function_node
+from chainer.utils import type_check
+
+
+class Stack(function_node.FunctionNode):
+
+    def __init__(self, axis=1):
+        if not isinstance(axis, int):
+            raise TypeError('axis must be int')
+        self.axis = axis
+
+    def check_type_forward(self, in_types):
+        type_check.expect(in_types.size() > 0)
+        if self.axis >= 0:
+            type_check.expect(in_types[0].ndim >= self.axis)
+        else:
+            type_check.expect(in_types[0].ndim >= -self.axis - 1)
+
+        for i in six.moves.range(1, type_check.eval(in_types.size())):
+            type_check.expect(
+                in_types[0].dtype == in_types[i].dtype,
+                in_types[0].shape == in_types[i].shape)
+
+    def forward(self, xs):
+        xp = cuda.get_array_module(*xs)
+        return xp.stack(xs, self.axis),
+
+    def backward(self, indexes, grad_outputs):
+        gx, = grad_outputs
+        return chainer.functions._split_axis_squeeze(
+            gx, self.axis)
 
 
 def stack(xs, axis=0):
@@ -86,5 +120,5 @@ def stack(xs, axis=0):
         (3, 4, 2)
 
     """
-    xs = [chainer.functions.expand_dims(x, axis) for x in xs]
-    return chainer.functions.concat(xs, axis)
+    ret, = Stack(axis).apply(xs)
+    return ret
