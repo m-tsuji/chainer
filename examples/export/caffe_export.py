@@ -19,7 +19,7 @@ archs = {
 
 def get_network_for_imagenet(arch_name):
     model = archs[arch_name]()
-    input_image = np.ones((1, 3, 244, 244), dtype='f')
+    input_image = np.ones((1, 3, 224, 224), dtype='f')
     with chainer.force_backprop_mode(), chainer.using_config('train', False):
         x = chainer.Variable(input_image, requires_grad=True)
         y = model(x, layers=['prob'])['prob']
