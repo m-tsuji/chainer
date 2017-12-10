@@ -1,5 +1,6 @@
 from collections import OrderedDict
 
+import heapq
 import numpy
 import os
 import six
@@ -29,7 +30,6 @@ class _RetrieveAsCaffeModel(object):
         self.caffemodel = caffemodel
         self.prototxt = prototxt
 
-        self.seen_funcs = set()
         self.naming_map = {}  # key:string, val:dict(key: func, val: index)
 
     def _get_layer_name(self, layer):
@@ -49,7 +49,7 @@ class _RetrieveAsCaffeModel(object):
 
         if layer not in self.naming_map[label].keys():
             self.naming_map[label][layer] = len(self.naming_map[label]) + 1
-        return '{}-{}'.format(label, len(self.naming_map[label]))
+        return '{}-{}'.format(label, self.naming_map[label][layer])
 
     def _get_parent_name(self, parent_):
         if parent_ is None:
@@ -59,7 +59,7 @@ class _RetrieveAsCaffeModel(object):
 
     def _gen_layer_prototxt(self, layer_params, name='layer', depth=0,
                             indent=2):
-        if type(layer_params) in (dict, OrderedDict):
+        if isinstance(layer_params, (dict, OrderedDict)):
             s = name + ' {\n'
             indent_s = ' ' * ((depth + 1) * indent)
             for key, val in layer_params.items():
@@ -68,13 +68,13 @@ class _RetrieveAsCaffeModel(object):
             s += ' ' * (depth * indent)
             s += '}\n'
             return s
-        elif type(layer_params) in (int, float):
+        elif isinstance(layer_params, (int, float)):
             return '{}: {}\n'.format(name, layer_params)
-        elif type(layer_params) is bool:
+        elif isinstance(layer_params, bool):
             return '{}: {}\n'.format(name, 'true' if layer_params else 'false')
-        elif type(layer_params) is str:
+        elif isinstance(layer_params, str):
             return '{}: "{}"\n'.format(name, layer_params)
-        elif type(layer_params) is list:
+        elif isinstance(layer_params, list):
             s = ''
             indent_s = ' ' * depth * indent
             for i, t in enumerate(layer_params):
@@ -93,8 +93,8 @@ class _RetrieveAsCaffeModel(object):
         params = OrderedDict()
         params['type'] = None
         params['name'] = layer_name
-        params['top'] = layer_name
         params['bottom'] = parent_layer_names
+        params['top'] = layer_name
         layer = None
         if net is not None:
             layer = net.layer.add()
@@ -150,13 +150,12 @@ class _RetrieveAsCaffeModel(object):
             if net is not None:
                 for k, v in six.iteritems(convolution_param):
                     setattr(layer.convolution_param, k, v)
-                # print(params['name'], len(W.data.flatten()),
-                #       len(b.data.flatten()))
-                _add_blob(layer, [n_in, n_out, kh, kw], W.data)
+
+                _add_blob(layer, [n_out, n_in, kh, kw], W.data)
 
                 if b is not None:
                     b.retain_data()
-                    _add_blob(layer, [1, n_out], b.data)
+                    _add_blob(layer, [n_out], b.data)
 
         elif func.label in ('MaxPooling2D', 'AveragePooling2D'):
             kw = func.kw
@@ -191,14 +190,52 @@ class _RetrieveAsCaffeModel(object):
                     setattr(layer.lrn_param, k, v)
 
         elif func.label == 'FixedBatchNormalization':
-            _, _, _, mean, var = func.inputs
+            _, gamma, beta, mean, var = func.inputs
             batch_norm_param = {'use_global_stats': True}
             params['type'] = 'BatchNorm'
+            params['bottom'] = params['bottom'][:1]
             params['batch_norm_param'] = batch_norm_param
             if net is not None:
+                for k, v in six.iteritems(batch_norm_param):
+                    setattr(layer.batch_norm_param, k, v)
                 _add_blob(layer, [mean.data.size], mean.data)
                 _add_blob(layer, [var.data.size], var.data)
                 _add_blob(layer, [1], numpy.ones((1,), dtype='f'))
+
+            if gamma.data is None and beta.data is None:
+                pass
+            else:
+                bn_name = layer_name + '_bn'
+                params['name'] = bn_name
+                params['top'] = bn_name
+                prototxt.write(self._gen_layer_prototxt(params))
+                if net is not None:
+                    layer.name = params['name']
+                    layer.type = params['type']
+                    layer.bottom[:] = params['bottom']
+                    layer.top[:] = params['top']
+                    layer.phase = caffe_pb.TEST
+                del params, layer
+                params = OrderedDict()
+                params['type'] = 'Scale'
+                params['name'] = layer_name
+                params['bottom'] = bn_name
+                params['top'] = layer_name
+                if net is not None:
+                    layer = net.layer.add()
+                beta.retain_data()
+                bias_term = beta.data is not None
+                scale_param = {
+                    'axis': 1,
+                    'bias_term': bias_term,
+                }
+                params['scale_param'] = scale_param
+                if net is not None:
+                    for k, v in six.iteritems(scale_param):
+                        setattr(layer.scale_param, k, v)
+                    _add_blob(layer, [gamma.data.size], gamma.data)
+                    if bias_term:
+                        _add_blob(layer, [beta.data.size], beta.data)
 
         elif func.label == 'ReLU':
             params['type'] = 'ReLU'
@@ -208,7 +245,7 @@ class _RetrieveAsCaffeModel(object):
             concat_param = {'axis': axis}
             params['type'] = 'Concat'
             params['concat_param'] = concat_param
-            if net is None:
+            if net is not None:
                 for k, v in six.iteritems(concat_param):
                     setattr(layer.concat_param, k, v)
 
@@ -230,6 +267,9 @@ class _RetrieveAsCaffeModel(object):
                 dim = reshape_param['shape']['dim']
                 layer.reshape_param.shape.dim[:] = dim
 
+        elif func.label == '_ + _':
+            params['type'] = 'Eltwise'
+
         else:
             raise Exception(
                 'Cannot convert, name={}, rank={}, label={}, inputs={}'.format(
@@ -245,22 +285,28 @@ class _RetrieveAsCaffeModel(object):
             layer.phase = caffe_pb.TEST
 
     def _get_dump_list(self, outputs):
-        funcs = [var.creator for var in outputs if var.creator is not None]
-        # output_blobs = [self._get_layer_name(func) for func in funcs]
         dump_list = []
-        while funcs:
-            func = funcs.pop(0)
-            assert isinstance(func, _function_types)
+        cand_funcs = []
+        seen_set = set()
 
+        def add_cand(cand):
+            if cand is None or cand in seen_set:
+                return
+            # Negate since heapq is min-heap
+            heapq.heappush(cand_funcs, (-cand.rank, len(seen_set), cand))
+            seen_set.add(cand)
+
+        for var in outputs:
+            add_cand(var.creator)
+
+        while cand_funcs:
+            _, _, func = heapq.heappop(cand_funcs)
+            assert isinstance(func, _function_types)
             dump_list.append(func)
 
-            inputs = func.inputs
-            for _input in inputs:
-                creator = _input.creator
-                if creator is not None and creator not in self.seen_funcs:
-                    assert isinstance(creator, _function_types)
-                    funcs.append(creator)
-                    self.seen_funcs.add(creator)
+            for _input in func.inputs:
+                add_cand(_input.creator)
+
         return dump_list[::-1]
 
     def __call__(self, name, inputs, outputs):

@@ -30,6 +30,7 @@ def main():
     parser = argparse.ArgumentParser(description='Export')
     parser.add_argument(
         '--arch', '-a', type=str, required=True,
+        choices=archs.keys(),
         help='Arch name. models: ' + ', '.join(archs.keys()) + '.')
     parser.add_argument(
         '--out-dir', '-o', type=str, required=True,
