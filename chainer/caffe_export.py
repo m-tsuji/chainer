@@ -208,7 +208,8 @@ class _RetrieveAsCaffeModel(object):
                 bn_name = layer_name + '_bn'
                 params['name'] = bn_name
                 params['top'] = bn_name
-                prototxt.write(self._gen_layer_prototxt(params))
+                if prototxt is not None:
+                    prototxt.write(self._gen_layer_prototxt(params))
                 if net is not None:
                     layer.name = params['name']
                     layer.type = params['type']
